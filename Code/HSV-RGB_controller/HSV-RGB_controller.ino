@@ -25,6 +25,15 @@ const byte EncoderPins[] = {A1, A0, A2}; //!< Rotary encoder pins {A, B, switch}
 const byte DisplayAddress = 0x3C; //!< Address of the oled diplay
 //used by I2C = {A4, A5}; //reminder
 
+
+/****************************************************************
+* Global settings
+****************************************************************/
+const unsigned int FadeOnTime   = 2000;
+const unsigned int FadeOffTime  = 2000;
+const byte FadeOnOffInterval = 50; //!< Interval how often the brightness is updated while fading on or off
+
+
 /****************************************************************
 / Menu definition and setting
 ****************************************************************/
@@ -52,7 +61,9 @@ void (*const MenuFunctions[numberOf(Menu)])(int, byte) = {
   printMenuPlainValue,  //item 0
   printMenuValueHue,    //item 1 etc
   printMenuPlainValue,
-  printMenuTimeSeconds
+  printMenuTimeSeconds,
+  printMenuTimeMinutes,
+  printMenuTimeMinutes
 };
 
 //! Enum for easy naming Menu items or functions
@@ -78,7 +89,7 @@ U8G2_SSD1306_128X64_NONAME_2_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 / Menu variables
 ****************************************************************/
 //! Value for each Menu item to hold that setting
-unsigned int menuValues[numberOf(Menu)] = {50, 0, 255, 0};
+unsigned int menuValues[numberOf(Menu)] = {50, 0, 100, 0};
 byte menuPosition = 0; //!< current menu position
 unsigned int menuTime; //!< Last time the menu was altered (done in kickMenu() )
 unsigned int menuDrawTime; //!< Last time the menu was drawn
@@ -96,6 +107,16 @@ volatile unsigned long fadeUpdateTime; //!< Time at which the fade was updated l
 //! Last fade time set before fade disabled (set to long press default)
 unsigned long previousFade = 4 * 60;
 
+//!Enum for easy acces the operationModes
+enum OperationEnum_t{
+  NormalOperation,
+  FadeOff,
+  FadeOn,
+  FadeSleep
+};
+
+byte operationMode = NormalOperation;
+
 
 /****************************************************************
 / ISR routines
@@ -111,8 +132,8 @@ unsigned long previousFade = 4 * 60;
 ISR(TIMER1_OVF_vect){
   encoder->service();
   
-  unsigned int fadeInterval =(menuValues[FadeV] * 1000UL +  256) / 256;
-  if(menuValues[FadeV] && millis() - fadeUpdateTime >= fadeInterval){
+  unsigned int fadeInterval =(menuValues[FadeV] * 1000UL +  128) / 256;
+  if(menuValues[FadeV] && brightness && millis() - fadeUpdateTime >= fadeInterval){
     menuValues[HueV]++;
     if(menuValues[HueV] > 255){
       menuValues[HueV] = 0;
@@ -120,7 +141,7 @@ ISR(TIMER1_OVF_vect){
     fadeUpdateTime += fadeInterval;
     redrawMenu = true;
     
-    leds.setHSV(menuValues[HueV], menuValues[SaturationV], brightness);
+    setLeds(menuValues[HueV], menuValues[SaturationV], brightness);
     showLeds();
   }
 }
@@ -213,7 +234,7 @@ void loop() {
   
   }
   //otherwise, set byte corresponding to percentage
-  else{
+  else if(operationMode == NormalOperation){
     if(menuValues[BrightnessV]){
       brightness = map(menuValues[BrightnessV], 1, 100, 1, 255);
     }
@@ -222,19 +243,16 @@ void loop() {
     }
   }
   
-  //update led PWM if we are not fading (then it's already taken care of)
-  //if(!menuValues[FadeV]){
-  {
-    //although the interrupt should not change it without fading, just disable interrupts
-    noInterrupts();
-    
-    //calculate RGB values from HSV
-    leds.setHSV(menuValues[HueV], menuValues[SaturationV], brightness);
-    
-    //and re-enable them
-    interrupts();
-    showLeds();
-  }
+  //Time to set the led brightness
+  //no interrupts to be sure the interrupt will not change this as well
+  noInterrupts();
+  
+  //calculate RGB values from HSV
+  setLeds(menuValues[HueV], menuValues[SaturationV], brightness);
+  
+  //and re-enable them
+  interrupts();
+  showLeds();
 }
 
 
@@ -253,6 +271,21 @@ inline void showLeds(){
     analogWrite(RgbPins[i], leds[i]);
   }
 }
+
+/**
+ *  @brief Sets the led colors with HSV.
+ *  
+ *  @details Values are mapped according to there range.
+ *  
+ *  @param [in] h Hue 0-255
+ *  @param [in] s Saturation 0-100
+ *  @param [in] v Brightness 0-255
+ */
+inline void setLeds(byte h, byte s, byte v){
+  s = map(s, 0, 100, 0, 255);
+  leds.setHSV(h, s, v);
+}
+  
 
 
 /****************************************************************
@@ -605,8 +638,8 @@ void updateRotary(){
         if(value < 0 && (menuValues[menuPosition]) < -value){
           menuValues[menuPosition] = 0;
         }
-        else if(value > 0 && (255 - menuValues[menuPosition]) < value){
-          menuValues[menuPosition] = 255;
+        else if(value > 0 && (100 - menuValues[menuPosition]) < value){
+          menuValues[menuPosition] = 100;
         }
         else{
           menuValues[menuPosition] += value;
