@@ -29,10 +29,12 @@ const byte DisplayAddress = 0x3C; //!< Address of the oled diplay
 /****************************************************************
 * Global settings
 ****************************************************************/
-const unsigned int FadeOnTime   = 2000;
-const unsigned int FadeOffTime  = 2000;
-const byte FadeOnOffInterval = 50; //!< Interval how often the brightness is updated while fading on or off
+const unsigned int FadeOnTime   = 4000;
+const unsigned int FadeOffTime  = 4000;
+const byte FadeOnOffInterval = 20; //!< Interval how often the brightness is updated while fading on or off
 
+const byte FadeOnMaxCount = FadeOnTime / FadeOnOffInterval;
+const byte FadeOffMaxCount = FadeOffTime / FadeOnOffInterval;
 
 /****************************************************************
 / Menu definition and setting
@@ -101,11 +103,14 @@ bool menuInUse = false; //!< Flags the menu is in use (done in kickMenu() )
 / Led control variables
 ****************************************************************/
 CRGB leds; //!< Object to hold the RGB colors of the current led setting
-byte brightness; //!< Holds the current set brightness (manual or fade) as byte (0-255)
+byte brightness = 1; //!< Holds the current set brightness (manual or fade) as byte (0-255)
 
 volatile unsigned long fadeUpdateTime; //!< Time at which the fade was updated last
 //! Last fade time set before fade disabled (set to long press default)
 unsigned long previousFade = 4 * 60;
+
+volatile unsigned int fadeOnOffUpdateTime;
+volatile byte fadeOnOffCounter;
 
 //!Enum for easy acces the operationModes
 enum OperationEnum_t{
@@ -115,7 +120,7 @@ enum OperationEnum_t{
   FadeSleep
 };
 
-byte operationMode = NormalOperation;
+volatile byte operationMode = NormalOperation;
 
 
 /****************************************************************
@@ -130,8 +135,11 @@ byte operationMode = NormalOperation;
  *  @param [in] TIMER1_OVF_vect Indicates Timer1 Overflow
  */
 ISR(TIMER1_OVF_vect){
+  bool updateLeds = false;
+  
   encoder->service();
   
+  //color fading
   unsigned int fadeInterval =(menuValues[FadeV] * 1000UL +  128) / 256;
   if(menuValues[FadeV] && brightness && millis() - fadeUpdateTime >= fadeInterval){
     menuValues[HueV]++;
@@ -141,6 +149,39 @@ ISR(TIMER1_OVF_vect){
     fadeUpdateTime += fadeInterval;
     redrawMenu = true;
     
+    updateLeds = true;
+  }
+  
+  //OnOff fading
+  if(operationMode == FadeOff){
+    unsigned int currentMillis = millis();
+    if(currentMillis - fadeOnOffUpdateTime >= FadeOnOffInterval){
+      fadeOnOffUpdateTime = currentMillis;
+      
+      byte newVal = map(menuValues[BrightnessV], 1, 100, 1, 255);
+      newVal = newVal - fadeOnOffCounter * 255 / FadeOffMaxCount;
+      
+      if(newVal != brightness){
+        //check for overflow
+        if(newVal > brightness){
+          brightness = 0;
+        }
+        //Only if the new value is good we use that
+        else{
+          brightness = newVal;
+        }
+        
+        if(!brightness){
+          operationMode = NormalOperation;
+        }
+        
+        updateLeds = true;
+      }
+      fadeOnOffCounter++;
+    }
+  }
+  
+  if(updateLeds){
     setLeds(menuValues[HueV], menuValues[SaturationV], brightness);
     showLeds();
   }
@@ -221,6 +262,10 @@ void loop() {
     Serial.print(toc-tic);
     Serial.println("us");
     
+    Serial.print("operationmode: ");
+    Serial.println(operationMode);
+    Serial.println(fadeOnOffUpdateTime);
+    
   }
   
   //check if we need to store a new previousFade
@@ -234,7 +279,7 @@ void loop() {
   
   }
   //otherwise, set byte corresponding to percentage
-  else if(operationMode == NormalOperation){
+  else if(operationMode == NormalOperation && brightness){
     if(menuValues[BrightnessV]){
       brightness = map(menuValues[BrightnessV], 1, 100, 1, 255);
     }
@@ -578,10 +623,17 @@ void updateButton(){
     kickMenu();
     switch(menuPosition){
       case 0:{
-        menuValues[BrightnessV] = 0;
-        //now clear the display
-        display.firstPage();
-        while(display.nextPage());
+        if(operationMode == NormalOperation && brightness){
+          //menuValues[BrightnessV] = 0;
+          operationMode = FadeOff;
+          fadeOnOffCounter = 0;
+          fadeOnOffUpdateTime = millis();
+          
+          
+          //now clear the display
+          display.firstPage();
+          while(display.nextPage());
+        }
         break;
       }
       case 3:{
@@ -604,7 +656,9 @@ void updateRotary(){
   
   if(value){
     kickMenu();
-    redrawMenu = true;    
+    redrawMenu = true;
+    
+    brightness = 1;
     
     switch(menuPosition){
       //Brightness
